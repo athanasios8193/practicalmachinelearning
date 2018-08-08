@@ -1,0 +1,171 @@
+---
+title: "Machine Learning Course Project"
+author: "Athanasios Stamatoukos"
+date: "August 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(caret)
+library(randomForest)
+library(ggplot2)
+```
+
+## Overview
+
+The point of this analysis is to take data collected on how 6 participants lifted dumbbells and predict the way they lifted them. In this study, the participants were asked to lift dumbbells in 5 ways. 1 way was correct and the other 4 were incorrect. These 5 ways are in the "classe" variable and are:
+
+*A: correct way
+
+*B: throwing elbows to the front
+
+*C: lifting dumbbell only halfway
+
+*D: lowering dumbbell only halfway
+
+*E: throwing hips to the front
+
+The data has been split into a training set and an evaluation set which was checked in a quiz.  To train the prediction models, I will do 2 different random forest algorithms. These will be discussed more later.
+
+## Loading Data and Exploratory Analysis
+
+The first step is to load the data into R and evaluate what there is to work with.
+
+```{r loading-data, echo=FALSE, cache=TRUE}
+trainURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+testURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+trainfile <- "./Data/pml-training.csv"
+testfile <- "./Data/pml-testing.csv"
+if (!file.exists(trainfile)) {download.file(trainURL, destfile = trainfile)}
+if (!file.exists(testfile)) {download.file(testURL, destfile = testfile)}
+```
+
+We want to see exactly how much data we are working with, so we check the size of each of the training and evaluation data sets.
+
+```{r creating-dataframes}
+set.seed(1993)
+training <- read.csv(trainfile)
+validation <- read.csv(testfile)
+rbind(dim(training), dim(validation))
+```
+
+We can see here that there are 160 variables and 19622 observations in the training set and 20 observations in the evaluation set.
+
+Now I'll do a quick look at the data by grouping by classe using dplyr and averaging each variable to see what I'm working with. I spent a lot of time looking at the data and decided to eliminate any column whose mean was "N/A" and also to get rid of columns that didn't have useful data. In addition to doing this, when I was looking at the dataset at first, I calculated a z-score of each of the variables by class to see how variable the data was by class and no variable was more than 2 standard deviations from its mean. I tried doing this to see if there were any variables with high variance so I could include them in the model because if the z-scores were high and varied, that would mean the variable would be better at predicting the class. Alas, that got me nowhere so I didn't include that analysis in this report.
+
+```{r exploring-data1, warning=FALSE}
+trainx <- training %>% group_by(classe) %>% summarize_all(mean)
+trainx <- trainx[ , colSums(is.na(trainx))<nrow(trainx)]
+trainx <- trainx[ , -(2:5)]
+head(trainx)[1:6]
+```
+
+Now that we've seen some of the data, I am going to plot a frequency plot of  belt acceleration in the z-direction and plot for each class.
+
+```{r exploring-data2, echo=FALSE, message=FALSE}
+g <- ggplot(training, aes(x=accel_belt_z))+geom_freqpoly(aes(color=classe))
+g
+```
+
+For the most part, each class spikes around the same point. It's interesting to see, though, that classe E, which is the one where the participant moved his hips while lifting, is more spread out than the other variables which is a good sign and may allow us to possible use this variable in the analysis.
+
+## Subsetting Data
+
+I tried a couple of different things for variable selection, but based on the description of the data collection and some of the exploratory results I saw, I decided to select the variables which measured action in the z-direction. There are perhaps better methods to choose that would get better results, but subsetting the z-direction variables resulted in correct predictions.
+
+```{r subsetting-data}
+indZ <- grep("z$", names(training))
+training <- training[,c(length(training), indZ)]
+validation <- validation[,c(length(validation), indZ)]
+```
+
+## Training the Models
+
+The first thing to do when training the models is set fit control. I decided to use the 5-fold cross validation method because I saw it suggested in the class forums and it was said to work fine.
+
+Before I go any further I want to note that I tried splitting the testing data into a testing and a training set, but when I ran the caret version of the model while doing this, I got 19/20 predictions correct. When I did not split the data and tested on the validation set, I got 20/20 correct. This does not necessarily mean it is good practice, but it happened to work this time.
+
+```{r fit-control}
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+```
+
+Now it is time to run the models. Random forest is a good algorithm to use on this kind of dataset. I decided to run 2 models using different packages and settings. The first one, "modRF," uses caret's train function with the fit control settings shown above. The second model uses the randomForest function from the package of the same name. The caret method took a long time to compute, so I didn't want to have to do too many runs of this portion of the code because my computing power isn't good enough.
+
+```{r two-models, cache=TRUE}
+modRF <- train(classe~., method="rf", data=training, verbose=FALSE, trControl=fitControl)
+modRF.1 <- randomForest(classe~., data=training)
+```
+
+Now I predict the model on the data it was trained against and see that we get that the results are equal to each other. This should be expected when running the model against itself.
+
+```{r training-models}
+predRFtrain <- predict(modRF, training)
+predRF1train <- predict(modRF.1, training)
+mean(predRFtrain==predRF1train)
+```
+
+## Predicting Classe
+
+Now I run the model on the evaluation set and see the results. 
+```{r predicting-classe}
+predRF <- predict(modRF, validation)
+predRF1 <- predict(modRF.1, validation)
+rbind(predRF, predRF1)
+```
+
+We see here that each model predicts the same results (where 1:5 = A:E). I took the quiz and entered these predictions and they were indeed correct. So the model seems to work.
+
+## Analyzing the Models
+
+Now I am going to look at each model to see how good they are.
+
+```{r model-summaries, echo=FALSE}
+summRF <- modRF$finalModel
+summRF1 <- modRF.1
+```
+
+This is the caret model. We see that it created 500 trees with 2 variables tried at each split and got an Out-Of-Sample error rate of 3.31% which is pretty good. We can also see that the class error is quite small for each case which is another good sign. It would appear that this is a good model.
+
+```{r caret-summ, echo=FALSE}
+summRF
+```
+
+This is the randomForest package model. It created 500 trees with 3 variables tried at each split and got an Out-of-Sample error rate of 3.46% which is slightly higher than the caret model. This model performed better than the caret model for classes A&D. This model also works. This one, however, did not use cross validation.
+
+```{r rf-summ, echo=FALSE}
+summRF1
+```
+
+Now I'm going to plot the errors for each package. The plot shows that the more trees in the model, the lower the error. It appears around 200 trees that the model starts to even out. The steady state error of each classe matches the values you saw in the summaries of the models up above.
+
+```{r plotting-error, echo=FALSE}
+par(mfrow=c(1,2))
+plot(modRF$finalModel, main="Caret RF Error")
+legend("topright", colnames(modRF$finalModel$err.rate), col=1:6, cex=0.8, fill=1:6)
+plot(modRF.1, main="randomForest RF Error")
+legend("topright", colnames(modRF.1$err.rate), col=1:6, cex=0.8, fill=1:6)
+```
+
+This next plot shows the most important variables to the models. The two models have the exact same order of importance for the variables which is a good sign but should have been expected because the models are very similar. It would appear from the plots that measurements taken on the dumbbells themselves are most important to this model, with belt measurements being second most important. Rotational data seems to be least important.
+
+```{r plotting-importance, echo=FALSE}
+par(mfrow=c(1,2))
+varImpPlot(modRF$finalModel, main="Caret Variable \nImportance")
+varImpPlot(modRF.1, main="rF Variable \nImportance")
+```
+
+## Conclusions
+
+The two models I used can be considered "good" because they predicted the correct outcomes. I would like to potentially have access to more data to predict against to see if the model truly can predict any case.  Just because the models were 20/20 in predicting the classe doesn't necessarily mean they are correct. I'm sure there are better ways to predict the outcomes with less error, but given computational limitations, these predictions do well enough. It is unfortunate that I essentially had to go into the predicting of the evaluation set blind because when I tried to split the training data into a training and testing set but did not get all 20 predictions correct. Perhaps in another, more demanding data problem I could do a more rigorous exploration and prediction of the data.
+
+## Acknowledgements
+
+I would like to thank the team of Eduardo Velloso, Andreas Bulling, Hans Gellersen, Wallace Ugulino, and Hugo Fuks from Lancaster University, Max Planck Institute for Informatics, and Pontifical Catholic University of Rio de Janeiro for collecting this data and making it freely available for study.
+
+## References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
